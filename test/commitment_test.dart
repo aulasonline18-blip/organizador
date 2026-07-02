@@ -14,6 +14,7 @@ void main() {
       status: CommitmentStatus.pending,
       reminderOffsets: const [1440, 60, 0],
       createdAt: createdAt,
+      repeatRule: RepeatRule.monthly,
       amount: 129.9,
       hasSensitiveData: true,
     );
@@ -25,6 +26,7 @@ void main() {
     expect(restored.dueAt, dueAt);
     expect(restored.category, CommitmentCategory.conta);
     expect(restored.status, CommitmentStatus.pending);
+    expect(restored.repeatRule, RepeatRule.monthly);
     expect(restored.reminderOffsets, [1440, 60, 0]);
     expect(restored.amount, 129.9);
     expect(restored.hasSensitiveData, isTrue);

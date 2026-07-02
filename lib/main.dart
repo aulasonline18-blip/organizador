@@ -79,6 +79,8 @@ enum CommitmentStatus { pending, done, paid }
 
 enum CommitmentCategory { compromisso, conta, trabalho, pessoal, saude, estudo }
 
+enum RepeatRule { none, weekly, monthly, yearly }
+
 extension CommitmentStatusLabel on CommitmentStatus {
   String get label => switch (this) {
     CommitmentStatus.pending => 'Pendente',
@@ -98,6 +100,15 @@ extension CommitmentCategoryLabel on CommitmentCategory {
   };
 }
 
+extension RepeatRuleLabel on RepeatRule {
+  String get label => switch (this) {
+    RepeatRule.none => 'Nao repetir',
+    RepeatRule.weekly => 'Toda semana',
+    RepeatRule.monthly => 'Todo mes',
+    RepeatRule.yearly => 'Todo ano',
+  };
+}
+
 class Commitment {
   const Commitment({
     required this.id,
@@ -108,6 +119,7 @@ class Commitment {
     required this.status,
     required this.reminderOffsets,
     required this.createdAt,
+    this.repeatRule = RepeatRule.none,
     this.amount,
     this.hasSensitiveData = false,
   });
@@ -120,6 +132,7 @@ class Commitment {
   final CommitmentStatus status;
   final List<int> reminderOffsets;
   final DateTime createdAt;
+  final RepeatRule repeatRule;
   final double? amount;
   final bool hasSensitiveData;
 
@@ -133,6 +146,7 @@ class Commitment {
     CommitmentCategory? category,
     CommitmentStatus? status,
     List<int>? reminderOffsets,
+    RepeatRule? repeatRule,
     double? amount,
     bool clearAmount = false,
     bool? hasSensitiveData,
@@ -146,6 +160,7 @@ class Commitment {
       status: status ?? this.status,
       reminderOffsets: reminderOffsets ?? this.reminderOffsets,
       createdAt: createdAt,
+      repeatRule: repeatRule ?? this.repeatRule,
       amount: clearAmount ? null : amount ?? this.amount,
       hasSensitiveData: hasSensitiveData ?? this.hasSensitiveData,
     );
@@ -160,6 +175,7 @@ class Commitment {
     'status': status.name,
     'reminderOffsets': reminderOffsets,
     'createdAt': createdAt.toIso8601String(),
+    'repeatRule': repeatRule.name,
     'amount': amount,
     'hasSensitiveData': hasSensitiveData,
   };
@@ -176,6 +192,9 @@ class Commitment {
           .map((value) => value as int)
           .toList(),
       createdAt: DateTime.parse(json['createdAt'] as String),
+      repeatRule: RepeatRule.values.byName(
+        json['repeatRule'] as String? ?? RepeatRule.none.name,
+      ),
       amount: (json['amount'] as num?)?.toDouble(),
       hasSensitiveData: json['hasSensitiveData'] as bool? ?? false,
     );
@@ -481,6 +500,7 @@ class _HomePageState extends State<HomePage> {
   final _secureAccessService = SecureAccessService();
   final _currency = NumberFormat.simpleCurrency(locale: 'pt_BR');
   List<Commitment> _commitments = [];
+  final Set<String> _expandedCommitments = {};
   bool _loading = true;
   CommitmentCategory? _categoryFilter;
 
@@ -583,12 +603,22 @@ class _HomePageState extends State<HomePage> {
     Commitment commitment,
     CommitmentStatus status,
   ) async {
-    final updated = _commitments
-        .map(
-          (item) =>
-              item.id == commitment.id ? item.copyWith(status: status) : item,
-        )
-        .toList();
+    final updated = _commitments.map((item) {
+      return item.id == commitment.id ? item.copyWith(status: status) : item;
+    }).toList();
+    Commitment? nextOccurrence;
+    if (commitment.status == CommitmentStatus.pending &&
+        status != CommitmentStatus.pending &&
+        commitment.repeatRule != RepeatRule.none) {
+      nextOccurrence = _nextOccurrence(commitment);
+      updated.add(nextOccurrence);
+      if (commitment.hasSensitiveData) {
+        final sensitive = await widget.repository.loadSensitiveData(
+          commitment.id,
+        );
+        await widget.repository.saveSensitiveData(nextOccurrence.id, sensitive);
+      }
+    }
     if (status == CommitmentStatus.pending) {
       await _persist(updated);
     } else {
@@ -599,6 +629,45 @@ class _HomePageState extends State<HomePage> {
       }
       await _persist(updated);
     }
+  }
+
+  Commitment _nextOccurrence(Commitment commitment) {
+    return Commitment(
+      id: const Uuid().v4(),
+      title: commitment.title,
+      description: commitment.description,
+      dueAt: _nextDueAt(commitment.dueAt, commitment.repeatRule),
+      category: commitment.category,
+      status: CommitmentStatus.pending,
+      reminderOffsets: commitment.reminderOffsets,
+      createdAt: DateTime.now(),
+      repeatRule: commitment.repeatRule,
+      amount: commitment.amount,
+      hasSensitiveData: commitment.hasSensitiveData,
+    );
+  }
+
+  DateTime _nextDueAt(DateTime current, RepeatRule repeatRule) {
+    return switch (repeatRule) {
+      RepeatRule.none => current,
+      RepeatRule.weekly => current.add(const Duration(days: 7)),
+      RepeatRule.monthly => _addMonths(current, 1),
+      RepeatRule.yearly => _addMonths(current, 12),
+    };
+  }
+
+  DateTime _addMonths(DateTime date, int months) {
+    final targetMonth = date.month + months;
+    final year = date.year + ((targetMonth - 1) ~/ 12);
+    final month = ((targetMonth - 1) % 12) + 1;
+    final lastDay = DateTime(year, month + 1, 0).day;
+    return DateTime(
+      year,
+      month,
+      date.day > lastDay ? lastDay : date.day,
+      date.hour,
+      date.minute,
+    );
   }
 
   Future<void> _showSensitiveData(Commitment commitment) async {
@@ -683,9 +752,23 @@ class _HomePageState extends State<HomePage> {
                         padding: const EdgeInsets.only(bottom: 12),
                         child: CommitmentCard(
                           commitment: commitment,
+                          expanded: _expandedCommitments.contains(
+                            commitment.id,
+                          ),
                           amountLabel: commitment.amount == null
                               ? null
                               : _currency.format(commitment.amount),
+                          onToggleExpanded: () {
+                            setState(() {
+                              if (_expandedCommitments.contains(
+                                commitment.id,
+                              )) {
+                                _expandedCommitments.remove(commitment.id);
+                              } else {
+                                _expandedCommitments.add(commitment.id);
+                              }
+                            });
+                          },
                           onEdit: () => _openForm(commitment),
                           onDelete: () => _delete(commitment),
                           onShowSensitive: commitment.hasSensitiveData
@@ -809,6 +892,8 @@ class EmptyState extends StatelessWidget {
 class CommitmentCard extends StatelessWidget {
   const CommitmentCard({
     required this.commitment,
+    required this.expanded,
+    required this.onToggleExpanded,
     required this.onEdit,
     required this.onDelete,
     required this.onStatusChanged,
@@ -818,7 +903,9 @@ class CommitmentCard extends StatelessWidget {
   });
 
   final Commitment commitment;
+  final bool expanded;
   final String? amountLabel;
+  final VoidCallback onToggleExpanded;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
   final VoidCallback? onShowSensitive;
@@ -835,8 +922,99 @@ class CommitmentCard extends StatelessWidget {
         : Theme.of(context).colorScheme.primary;
 
     return Card(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: onToggleExpanded,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+            14,
+            expanded ? 14 : 10,
+            6,
+            expanded ? 14 : 10,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    expanded ? Icons.expand_less : Icons.chevron_right,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      commitment.title,
+                      maxLines: expanded ? 2 : 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ),
+                  if (!expanded)
+                    Icon(
+                      commitment.isOverdue
+                          ? Icons.error_outline
+                          : Icons.schedule,
+                      size: 18,
+                      color: statusColor,
+                    ),
+                  const SizedBox(width: 8),
+                  Text(
+                    DateFormat('dd/MM', 'pt_BR').format(commitment.dueAt),
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodySmall?.copyWith(color: statusColor),
+                  ),
+                ],
+              ),
+              if (expanded) ...[
+                const SizedBox(height: 10),
+                _ExpandedCommitmentDetails(
+                  commitment: commitment,
+                  dateLabel: dateLabel,
+                  statusColor: statusColor,
+                  amountLabel: amountLabel,
+                  onEdit: onEdit,
+                  onDelete: onDelete,
+                  onShowSensitive: onShowSensitive,
+                  onStatusChanged: onStatusChanged,
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ExpandedCommitmentDetails extends StatelessWidget {
+  const _ExpandedCommitmentDetails({
+    required this.commitment,
+    required this.dateLabel,
+    required this.statusColor,
+    required this.onEdit,
+    required this.onDelete,
+    required this.onStatusChanged,
+    this.amountLabel,
+    this.onShowSensitive,
+  });
+
+  final Commitment commitment;
+  final String dateLabel;
+  final Color statusColor;
+  final String? amountLabel;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+  final VoidCallback? onShowSensitive;
+  final ValueChanged<CommitmentStatus> onStatusChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 32, right: 8),
       child: Padding(
-        padding: const EdgeInsets.all(14),
+        padding: EdgeInsets.zero,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -847,11 +1025,6 @@ class CommitmentCard extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        commitment.title,
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                      const SizedBox(height: 6),
                       Wrap(
                         spacing: 8,
                         runSpacing: 8,
@@ -869,6 +1042,12 @@ class CommitmentCard extends StatelessWidget {
                             visualDensity: VisualDensity.compact,
                             label: Text(commitment.category.label),
                           ),
+                          if (commitment.repeatRule != RepeatRule.none)
+                            Chip(
+                              visualDensity: VisualDensity.compact,
+                              avatar: const Icon(Icons.repeat),
+                              label: Text(commitment.repeatRule.label),
+                            ),
                           if (amountLabel != null)
                             Chip(
                               visualDensity: VisualDensity.compact,
@@ -980,6 +1159,7 @@ class _CommitmentFormPageState extends State<CommitmentFormPage> {
   late DateTime _dueAt;
   late CommitmentCategory _category;
   late CommitmentStatus _status;
+  late RepeatRule _repeatRule;
   late Set<int> _reminderOffsets;
   bool _loadingSensitive = true;
   bool _hidePassword = true;
@@ -994,6 +1174,7 @@ class _CommitmentFormPageState extends State<CommitmentFormPage> {
     _dueAt = initial?.dueAt ?? DateTime.now().add(const Duration(hours: 1));
     _category = initial?.category ?? CommitmentCategory.compromisso;
     _status = initial?.status ?? CommitmentStatus.pending;
+    _repeatRule = initial?.repeatRule ?? RepeatRule.none;
     _reminderOffsets = {
       ...(initial?.reminderOffsets ?? [60, 15, 0]),
     };
@@ -1076,6 +1257,7 @@ class _CommitmentFormPageState extends State<CommitmentFormPage> {
       status: _status,
       reminderOffsets: _reminderOffsets.toList()..sort(),
       createdAt: initial?.createdAt ?? DateTime.now(),
+      repeatRule: _repeatRule,
       amount: amountText.isEmpty ? null : double.tryParse(amountText),
       hasSensitiveData: !sensitive.isEmpty,
     );
@@ -1177,6 +1359,27 @@ class _CommitmentFormPageState extends State<CommitmentFormPage> {
                     onChanged: (value) {
                       if (value != null) {
                         setState(() => _status = value);
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<RepeatRule>(
+                    initialValue: _repeatRule,
+                    decoration: const InputDecoration(
+                      labelText: 'Repetir',
+                      prefixIcon: Icon(Icons.repeat),
+                    ),
+                    items: RepeatRule.values
+                        .map(
+                          (repeatRule) => DropdownMenuItem(
+                            value: repeatRule,
+                            child: Text(repeatRule.label),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) {
+                      if (value != null) {
+                        setState(() => _repeatRule = value);
                       }
                     },
                   ),
