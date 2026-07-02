@@ -21,14 +21,17 @@ void main() async {
   final notificationService = NotificationService();
   await notificationService.initialize();
 
+  final preferences = await SharedPreferences.getInstance();
   final repository = CommitmentRepository(
-    preferences: await SharedPreferences.getInstance(),
+    preferences: preferences,
     secureStorage: const FlutterSecureStorage(),
   );
+  final walletRepository = WalletRepository(preferences: preferences);
 
   runApp(
     OrganizerApp(
       repository: repository,
+      walletRepository: walletRepository,
       notificationService: notificationService,
     ),
   );
@@ -37,11 +40,13 @@ void main() async {
 class OrganizerApp extends StatelessWidget {
   const OrganizerApp({
     required this.repository,
+    required this.walletRepository,
     required this.notificationService,
     super.key,
   });
 
   final CommitmentRepository repository;
+  final WalletRepository walletRepository;
   final NotificationService notificationService;
 
   @override
@@ -67,8 +72,9 @@ class OrganizerApp extends StatelessWidget {
           ),
         ),
       ),
-      home: HomePage(
+      home: CategoryHomePage(
         repository: repository,
+        walletRepository: walletRepository,
         notificationService: notificationService,
       ),
     );
@@ -301,6 +307,74 @@ class CommitmentRepository {
   String _sensitiveKey(String id) => 'commitment_sensitive_$id';
 }
 
+class Wallet {
+  const Wallet({
+    required this.id,
+    required this.name,
+    required this.positiveAmount,
+    required this.negativeAmount,
+    required this.createdAt,
+  });
+
+  final String id;
+  final String name;
+  final double positiveAmount;
+  final double negativeAmount;
+  final DateTime createdAt;
+
+  double get balance => positiveAmount - negativeAmount;
+
+  Map<String, Object?> toJson() => {
+    'id': id,
+    'name': name,
+    'positiveAmount': positiveAmount,
+    'negativeAmount': negativeAmount,
+    'createdAt': createdAt.toIso8601String(),
+  };
+
+  static Wallet fromJson(Map<String, Object?> json) {
+    return Wallet(
+      id: json['id'] as String,
+      name: json['name'] as String,
+      positiveAmount: (json['positiveAmount'] as num?)?.toDouble() ?? 0,
+      negativeAmount: (json['negativeAmount'] as num?)?.toDouble() ?? 0,
+      createdAt: DateTime.parse(json['createdAt'] as String),
+    );
+  }
+}
+
+class WalletRepository {
+  WalletRepository({required SharedPreferences preferences})
+    // Named public parameters keep the constructor readable at call sites.
+    // ignore: prefer_initializing_formals
+    : _preferences = preferences;
+
+  static const _walletsKey = 'wallets_v1';
+
+  final SharedPreferences _preferences;
+
+  Future<List<Wallet>> loadWallets() async {
+    final raw = _preferences.getString(_walletsKey);
+    if (raw == null || raw.isEmpty) {
+      return [];
+    }
+    final decoded = jsonDecode(raw) as List<dynamic>;
+    final wallets = decoded
+        .map((item) => Wallet.fromJson(item as Map<String, Object?>))
+        .toList();
+    wallets.sort((a, b) => a.name.compareTo(b.name));
+    return wallets;
+  }
+
+  Future<void> saveWallets(List<Wallet> wallets) async {
+    wallets.sort((a, b) => a.name.compareTo(b.name));
+    await _preferences.setString(
+      _walletsKey,
+      jsonEncode(wallets.map((wallet) => wallet.toJson()).toList()),
+    );
+  }
+}
+
 class NotificationService {
   final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
@@ -482,8 +556,92 @@ class ReminderOptions {
   };
 }
 
-class HomePage extends StatefulWidget {
-  const HomePage({
+class CategoryHomePage extends StatelessWidget {
+  const CategoryHomePage({
+    required this.repository,
+    required this.walletRepository,
+    required this.notificationService,
+    super.key,
+  });
+
+  final CommitmentRepository repository;
+  final WalletRepository walletRepository;
+  final NotificationService notificationService;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Organizador')),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
+          children: [
+            CategoryTile(
+              icon: Icons.event_note,
+              title: 'Compromissos',
+              subtitle: 'Obrigacoes, contas, lembretes e acessos',
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => CommitmentsPage(
+                      repository: repository,
+                      notificationService: notificationService,
+                    ),
+                  ),
+                );
+              },
+            ),
+            const SizedBox(height: 12),
+            CategoryTile(
+              icon: Icons.account_balance_wallet_outlined,
+              title: 'Bolsas',
+              subtitle: 'Carteiras com entradas, saidas e saldo',
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) =>
+                        WalletsPage(repository: walletRepository),
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class CategoryTile extends StatelessWidget {
+  const CategoryTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+    super.key,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: ListTile(
+        onTap: onTap,
+        leading: Icon(icon, color: Theme.of(context).colorScheme.primary),
+        title: Text(title, style: Theme.of(context).textTheme.titleMedium),
+        subtitle: Text(subtitle),
+        trailing: const Icon(Icons.chevron_right),
+      ),
+    );
+  }
+}
+
+class CommitmentsPage extends StatefulWidget {
+  const CommitmentsPage({
     required this.repository,
     required this.notificationService,
     super.key,
@@ -493,10 +651,10 @@ class HomePage extends StatefulWidget {
   final NotificationService notificationService;
 
   @override
-  State<HomePage> createState() => _HomePageState();
+  State<CommitmentsPage> createState() => _CommitmentsPageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _CommitmentsPageState extends State<CommitmentsPage> {
   final _secureAccessService = SecureAccessService();
   final _currency = NumberFormat.simpleCurrency(locale: 'pt_BR');
   List<Commitment> _commitments = [];
@@ -700,7 +858,7 @@ class _HomePageState extends State<HomePage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Organizador'),
+        title: const Text('Compromissos'),
         actions: [
           IconButton(
             tooltip: 'Atualizar',
@@ -1489,6 +1647,447 @@ class _CommitmentFormPageState extends State<CommitmentFormPage> {
                 ],
               ),
             ),
+    );
+  }
+}
+
+class WalletsPage extends StatefulWidget {
+  const WalletsPage({required this.repository, super.key});
+
+  final WalletRepository repository;
+
+  @override
+  State<WalletsPage> createState() => _WalletsPageState();
+}
+
+class _WalletsPageState extends State<WalletsPage> {
+  final _currency = NumberFormat.simpleCurrency(locale: 'pt_BR');
+  List<Wallet> _wallets = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final wallets = await widget.repository.loadWallets();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _wallets = wallets;
+      _loading = false;
+    });
+  }
+
+  Future<void> _persist(List<Wallet> wallets) async {
+    await widget.repository.saveWallets(wallets);
+    if (mounted) {
+      setState(() => _wallets = wallets);
+    }
+  }
+
+  Future<void> _openForm([Wallet? wallet]) async {
+    final result = await Navigator.of(context).push<Wallet>(
+      MaterialPageRoute(
+        builder: (context) => WalletFormPage(initialWallet: wallet),
+      ),
+    );
+    if (result == null) {
+      return;
+    }
+
+    final updated = [..._wallets];
+    final index = updated.indexWhere((item) => item.id == result.id);
+    if (index == -1) {
+      updated.add(result);
+    } else {
+      updated[index] = result;
+    }
+    await _persist(updated);
+  }
+
+  Future<void> _delete(Wallet wallet) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Excluir carteira?'),
+        content: Text('Isso remove "${wallet.name}" da categoria Bolsas.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Excluir'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) {
+      return;
+    }
+
+    await _persist(_wallets.where((item) => item.id != wallet.id).toList());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final totalPositive = _wallets.fold<double>(
+      0,
+      (sum, wallet) => sum + wallet.positiveAmount,
+    );
+    final totalNegative = _wallets.fold<double>(
+      0,
+      (sum, wallet) => sum + wallet.negativeAmount,
+    );
+    final totalBalance = totalPositive - totalNegative;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Bolsas'),
+        actions: [
+          IconButton(
+            tooltip: 'Atualizar',
+            onPressed: _load,
+            icon: const Icon(Icons.refresh),
+          ),
+        ],
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : SafeArea(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
+                children: [
+                  WalletSummaryHeader(
+                    positive: _currency.format(totalPositive),
+                    negative: _currency.format(totalNegative),
+                    balance: _currency.format(totalBalance),
+                    negativeBalance: totalBalance < 0,
+                  ),
+                  const SizedBox(height: 16),
+                  if (_wallets.isEmpty)
+                    const WalletEmptyState()
+                  else
+                    ..._wallets.map(
+                      (wallet) => Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: WalletTile(
+                          wallet: wallet,
+                          positiveLabel: _currency.format(
+                            wallet.positiveAmount,
+                          ),
+                          negativeLabel: _currency.format(
+                            wallet.negativeAmount,
+                          ),
+                          balanceLabel: _currency.format(wallet.balance),
+                          onEdit: () => _openForm(wallet),
+                          onDelete: () => _delete(wallet),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _openForm(),
+        icon: const Icon(Icons.add),
+        label: const Text('Carteira'),
+      ),
+    );
+  }
+}
+
+class WalletSummaryHeader extends StatelessWidget {
+  const WalletSummaryHeader({
+    required this.positive,
+    required this.negative,
+    required this.balance,
+    required this.negativeBalance,
+    super.key,
+  });
+
+  final String positive;
+  final String negative;
+  final String balance;
+  final bool negativeBalance;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Resultado geral',
+              style: Theme.of(context).textTheme.labelMedium,
+            ),
+            Text(
+              balance,
+              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                color: negativeBalance
+                    ? Theme.of(context).colorScheme.error
+                    : Theme.of(context).colorScheme.primary,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(child: Text('Positivo: $positive')),
+                Expanded(child: Text('Negativo: $negative')),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class WalletEmptyState extends StatelessWidget {
+  const WalletEmptyState({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 64),
+      child: Column(
+        children: [
+          Icon(
+            Icons.account_balance_wallet_outlined,
+            size: 56,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'Nenhuma carteira cadastrada',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class WalletTile extends StatelessWidget {
+  const WalletTile({
+    required this.wallet,
+    required this.positiveLabel,
+    required this.negativeLabel,
+    required this.balanceLabel,
+    required this.onEdit,
+    required this.onDelete,
+    super.key,
+  });
+
+  final Wallet wallet;
+  final String positiveLabel;
+  final String negativeLabel;
+  final String balanceLabel;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final balanceColor = wallet.balance < 0
+        ? Theme.of(context).colorScheme.error
+        : Theme.of(context).colorScheme.primary;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 10, 6, 10),
+        child: Row(
+          children: [
+            Icon(Icons.account_balance_wallet_outlined, color: balanceColor),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    wallet.name,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Positivo $positiveLabel  |  Negativo $negativeLabel',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 104),
+              child: Text(
+                balanceLabel,
+                textAlign: TextAlign.end,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  color: balanceColor,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            PopupMenuButton<String>(
+              tooltip: 'Acoes',
+              onSelected: (value) {
+                switch (value) {
+                  case 'edit':
+                    onEdit();
+                  case 'delete':
+                    onDelete();
+                }
+              },
+              itemBuilder: (context) => const [
+                PopupMenuItem(value: 'edit', child: Text('Editar')),
+                PopupMenuItem(value: 'delete', child: Text('Excluir')),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class WalletFormPage extends StatefulWidget {
+  const WalletFormPage({this.initialWallet, super.key});
+
+  final Wallet? initialWallet;
+
+  @override
+  State<WalletFormPage> createState() => _WalletFormPageState();
+}
+
+class _WalletFormPageState extends State<WalletFormPage> {
+  final _formKey = GlobalKey<FormState>();
+  final _nameController = TextEditingController();
+  final _positiveController = TextEditingController();
+  final _negativeController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    final wallet = widget.initialWallet;
+    _nameController.text = wallet?.name ?? '';
+    _positiveController.text = wallet?.positiveAmount.toStringAsFixed(2) ?? '';
+    _negativeController.text = wallet?.negativeAmount.toStringAsFixed(2) ?? '';
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _positiveController.dispose();
+    _negativeController.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
+    final initial = widget.initialWallet;
+    Navigator.pop(
+      context,
+      Wallet(
+        id: initial?.id ?? const Uuid().v4(),
+        name: _nameController.text.trim(),
+        positiveAmount: _parseAmount(_positiveController.text),
+        negativeAmount: _parseAmount(_negativeController.text),
+        createdAt: initial?.createdAt ?? DateTime.now(),
+      ),
+    );
+  }
+
+  double _parseAmount(String value) {
+    return double.tryParse(value.trim().replaceAll(',', '.')) ?? 0;
+  }
+
+  String? _validateAmount(String? value) {
+    final text = value?.trim().replaceAll(',', '.') ?? '';
+    if (text.isEmpty) {
+      return null;
+    }
+    return double.tryParse(text) == null ? 'Informe um valor valido' : null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(
+          widget.initialWallet == null ? 'Nova carteira' : 'Editar carteira',
+        ),
+        actions: [
+          IconButton(
+            tooltip: 'Salvar',
+            onPressed: _save,
+            icon: const Icon(Icons.check),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: Form(
+          key: _formKey,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+            children: [
+              TextFormField(
+                controller: _nameController,
+                decoration: const InputDecoration(
+                  labelText: 'Nome da carteira',
+                  prefixIcon: Icon(Icons.account_balance_wallet_outlined),
+                ),
+                textInputAction: TextInputAction.next,
+                validator: (value) => value == null || value.trim().isEmpty
+                    ? 'Informe um nome'
+                    : null,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _positiveController,
+                decoration: const InputDecoration(
+                  labelText: 'Positivo',
+                  prefixIcon: Icon(Icons.add_circle_outline),
+                ),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                validator: _validateAmount,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _negativeController,
+                decoration: const InputDecoration(
+                  labelText: 'Negativo',
+                  prefixIcon: Icon(Icons.remove_circle_outline),
+                ),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                validator: _validateAmount,
+              ),
+              const SizedBox(height: 20),
+              FilledButton.icon(
+                onPressed: _save,
+                icon: const Icon(Icons.save),
+                label: const Text('Salvar carteira'),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

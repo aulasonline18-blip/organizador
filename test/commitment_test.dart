@@ -31,4 +31,24 @@ void main() {
     expect(restored.amount, 129.9);
     expect(restored.hasSensitiveData, isTrue);
   });
+
+  test('Wallet serializes and calculates balance', () {
+    final createdAt = DateTime(2026, 7, 2, 10);
+    final wallet = Wallet(
+      id: 'wallet-a',
+      name: 'Carteira A',
+      positiveAmount: 500,
+      negativeAmount: 125.5,
+      createdAt: createdAt,
+    );
+
+    final restored = Wallet.fromJson(wallet.toJson());
+
+    expect(restored.id, 'wallet-a');
+    expect(restored.name, 'Carteira A');
+    expect(restored.positiveAmount, 500);
+    expect(restored.negativeAmount, 125.5);
+    expect(restored.balance, 374.5);
+    expect(restored.createdAt, createdAt);
+  });
 }
