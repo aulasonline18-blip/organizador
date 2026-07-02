@@ -319,6 +319,11 @@ class NotificationService {
           AndroidFlutterLocalNotificationsPlugin
         >()
         ?.requestNotificationsPermission();
+    await _plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >()
+        ?.requestExactAlarmsPermission();
   }
 
   Future<void> scheduleCommitment(Commitment commitment) async {
@@ -341,25 +346,56 @@ class NotificationService {
           ? ''
           : ' Valor: ${NumberFormat.simpleCurrency(locale: 'pt_BR').format(commitment.amount)}.';
 
-      await _plugin.zonedSchedule(
+      await _scheduleNotification(
         id: _notificationId(commitment.id, offset),
         title: title,
         body:
             '${commitment.category.label} marcado para ${DateFormat('dd/MM HH:mm', 'pt_BR').format(commitment.dueAt)}.$amount',
-        scheduledDate: tz.TZDateTime.from(scheduledAt, tz.local),
-        notificationDetails: const NotificationDetails(
-          android: AndroidNotificationDetails(
-            'commitments',
-            'Compromissos',
-            channelDescription: 'Lembretes de compromissos e obrigacoes',
-            importance: Importance.high,
-            priority: Priority.high,
-          ),
-          iOS: DarwinNotificationDetails(),
-          macOS: DarwinNotificationDetails(),
-        ),
-        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        scheduledAt: scheduledAt,
         payload: commitment.id,
+      );
+    }
+  }
+
+  Future<void> _scheduleNotification({
+    required int id,
+    required String title,
+    required String body,
+    required DateTime scheduledAt,
+    required String payload,
+  }) async {
+    const details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        'commitments',
+        'Compromissos',
+        channelDescription: 'Lembretes de compromissos e obrigacoes',
+        importance: Importance.high,
+        priority: Priority.high,
+      ),
+      iOS: DarwinNotificationDetails(),
+      macOS: DarwinNotificationDetails(),
+    );
+    final scheduledDate = tz.TZDateTime.from(scheduledAt, tz.local);
+
+    try {
+      await _plugin.zonedSchedule(
+        id: id,
+        title: title,
+        body: body,
+        scheduledDate: scheduledDate,
+        notificationDetails: details,
+        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        payload: payload,
+      );
+    } on PlatformException {
+      await _plugin.zonedSchedule(
+        id: id,
+        title: title,
+        body: body,
+        scheduledDate: scheduledDate,
+        notificationDetails: details,
+        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+        payload: payload,
       );
     }
   }
@@ -468,13 +504,16 @@ class _HomePageState extends State<HomePage> {
   Future<void> _persist(List<Commitment> commitments) async {
     commitments.sort((a, b) => a.dueAt.compareTo(b.dueAt));
     await widget.repository.saveCommitments(commitments);
+    if (mounted) {
+      setState(() => _commitments = commitments);
+    }
     for (final commitment in commitments) {
-      await widget.notificationService.scheduleCommitment(commitment);
+      try {
+        await widget.notificationService.scheduleCommitment(commitment);
+      } on PlatformException {
+        // Saving the commitment is more important than scheduling failure.
+      }
     }
-    if (!mounted) {
-      return;
-    }
-    setState(() => _commitments = commitments);
   }
 
   Future<void> _openForm([Commitment? commitment]) async {
@@ -502,8 +541,11 @@ class _HomePageState extends State<HomePage> {
       result.commitment.id,
       result.sensitiveData,
     );
-    await widget.notificationService.cancelCommitment(result.commitment.id);
-    await widget.notificationService.scheduleCommitment(result.commitment);
+    try {
+      await widget.notificationService.cancelCommitment(result.commitment.id);
+    } on PlatformException {
+      // Notification cleanup should not block saving the commitment.
+    }
     await _persist(updated);
   }
 
@@ -548,13 +590,15 @@ class _HomePageState extends State<HomePage> {
         )
         .toList();
     if (status == CommitmentStatus.pending) {
-      await widget.notificationService.scheduleCommitment(
-        commitment.copyWith(status: status),
-      );
+      await _persist(updated);
     } else {
-      await widget.notificationService.cancelCommitment(commitment.id);
+      try {
+        await widget.notificationService.cancelCommitment(commitment.id);
+      } on PlatformException {
+        // Notification cleanup should not block status changes.
+      }
+      await _persist(updated);
     }
-    await _persist(updated);
   }
 
   Future<void> _showSensitiveData(Commitment commitment) async {
