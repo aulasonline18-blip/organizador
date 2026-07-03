@@ -37,8 +37,7 @@ void main() {
     final wallet = Wallet(
       id: 'wallet-a',
       name: 'Carteira A',
-      positiveAmount: 500,
-      negativeAmount: 125.5,
+      balance: 374.5,
       createdAt: createdAt,
     );
 
@@ -46,9 +45,19 @@ void main() {
 
     expect(restored.id, 'wallet-a');
     expect(restored.name, 'Carteira A');
-    expect(restored.positiveAmount, 500);
-    expect(restored.negativeAmount, 125.5);
     expect(restored.balance, 374.5);
     expect(restored.createdAt, createdAt);
+  });
+
+  test('Wallet restores legacy positive and negative fields as balance', () {
+    final wallet = Wallet.fromJson({
+      'id': 'legacy-wallet',
+      'name': 'Carteira antiga',
+      'positiveAmount': 500,
+      'negativeAmount': 125.5,
+      'createdAt': DateTime(2026, 7, 2, 10).toIso8601String(),
+    });
+
+    expect(wallet.balance, 374.5);
   });
 }

@@ -311,33 +311,40 @@ class Wallet {
   const Wallet({
     required this.id,
     required this.name,
-    required this.positiveAmount,
-    required this.negativeAmount,
+    required this.balance,
     required this.createdAt,
   });
 
   final String id;
   final String name;
-  final double positiveAmount;
-  final double negativeAmount;
+  final double balance;
   final DateTime createdAt;
 
-  double get balance => positiveAmount - negativeAmount;
+  Wallet copyWith({String? name, double? balance}) {
+    return Wallet(
+      id: id,
+      name: name ?? this.name,
+      balance: balance ?? this.balance,
+      createdAt: createdAt,
+    );
+  }
 
   Map<String, Object?> toJson() => {
     'id': id,
     'name': name,
-    'positiveAmount': positiveAmount,
-    'negativeAmount': negativeAmount,
+    'balance': balance,
     'createdAt': createdAt.toIso8601String(),
   };
 
   static Wallet fromJson(Map<String, Object?> json) {
+    final legacyPositive = (json['positiveAmount'] as num?)?.toDouble();
+    final legacyNegative = (json['negativeAmount'] as num?)?.toDouble();
     return Wallet(
       id: json['id'] as String,
       name: json['name'] as String,
-      positiveAmount: (json['positiveAmount'] as num?)?.toDouble() ?? 0,
-      negativeAmount: (json['negativeAmount'] as num?)?.toDouble() ?? 0,
+      balance:
+          (json['balance'] as num?)?.toDouble() ??
+          ((legacyPositive ?? 0) - (legacyNegative ?? 0)),
       createdAt: DateTime.parse(json['createdAt'] as String),
     );
   }
@@ -1736,15 +1743,10 @@ class _WalletsPageState extends State<WalletsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final totalPositive = _wallets.fold<double>(
+    final totalBalance = _wallets.fold<double>(
       0,
-      (sum, wallet) => sum + wallet.positiveAmount,
+      (sum, wallet) => sum + wallet.balance,
     );
-    final totalNegative = _wallets.fold<double>(
-      0,
-      (sum, wallet) => sum + wallet.negativeAmount,
-    );
-    final totalBalance = totalPositive - totalNegative;
 
     return Scaffold(
       appBar: AppBar(
@@ -1764,8 +1766,6 @@ class _WalletsPageState extends State<WalletsPage> {
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
                 children: [
                   WalletSummaryHeader(
-                    positive: _currency.format(totalPositive),
-                    negative: _currency.format(totalNegative),
                     balance: _currency.format(totalBalance),
                     negativeBalance: totalBalance < 0,
                   ),
@@ -1778,12 +1778,6 @@ class _WalletsPageState extends State<WalletsPage> {
                         padding: const EdgeInsets.only(bottom: 10),
                         child: WalletTile(
                           wallet: wallet,
-                          positiveLabel: _currency.format(
-                            wallet.positiveAmount,
-                          ),
-                          negativeLabel: _currency.format(
-                            wallet.negativeAmount,
-                          ),
                           balanceLabel: _currency.format(wallet.balance),
                           onEdit: () => _openForm(wallet),
                           onDelete: () => _delete(wallet),
@@ -1804,15 +1798,11 @@ class _WalletsPageState extends State<WalletsPage> {
 
 class WalletSummaryHeader extends StatelessWidget {
   const WalletSummaryHeader({
-    required this.positive,
-    required this.negative,
     required this.balance,
     required this.negativeBalance,
     super.key,
   });
 
-  final String positive;
-  final String negative;
   final String balance;
   final bool negativeBalance;
 
@@ -1839,13 +1829,6 @@ class WalletSummaryHeader extends StatelessWidget {
                     ? Theme.of(context).colorScheme.error
                     : Theme.of(context).colorScheme.primary,
               ),
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(child: Text('Positivo: $positive')),
-                Expanded(child: Text('Negativo: $negative')),
-              ],
             ),
           ],
         ),
@@ -1882,8 +1865,6 @@ class WalletEmptyState extends StatelessWidget {
 class WalletTile extends StatelessWidget {
   const WalletTile({
     required this.wallet,
-    required this.positiveLabel,
-    required this.negativeLabel,
     required this.balanceLabel,
     required this.onEdit,
     required this.onDelete,
@@ -1891,8 +1872,6 @@ class WalletTile extends StatelessWidget {
   });
 
   final Wallet wallet;
-  final String positiveLabel;
-  final String negativeLabel;
   final String balanceLabel;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
@@ -1919,7 +1898,7 @@ class WalletTile extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Positivo $positiveLabel  |  Negativo $negativeLabel',
+                    'Saldo atual',
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -1973,24 +1952,77 @@ class WalletFormPage extends StatefulWidget {
 class _WalletFormPageState extends State<WalletFormPage> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
-  final _positiveController = TextEditingController();
-  final _negativeController = TextEditingController();
+  final _addController = TextEditingController();
+  final _withdrawController = TextEditingController();
+  final _currency = NumberFormat.simpleCurrency(locale: 'pt_BR');
+  late double _balance;
 
   @override
   void initState() {
     super.initState();
     final wallet = widget.initialWallet;
     _nameController.text = wallet?.name ?? '';
-    _positiveController.text = wallet?.positiveAmount.toStringAsFixed(2) ?? '';
-    _negativeController.text = wallet?.negativeAmount.toStringAsFixed(2) ?? '';
+    _balance = wallet?.balance ?? 0;
   }
 
   @override
   void dispose() {
     _nameController.dispose();
-    _positiveController.dispose();
-    _negativeController.dispose();
+    _addController.dispose();
+    _withdrawController.dispose();
     super.dispose();
+  }
+
+  void _addAmount() {
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
+    final amount = _parseAmount(_addController.text);
+    if (amount <= 0) {
+      return;
+    }
+    setState(() {
+      _balance += amount;
+      _addController.clear();
+    });
+  }
+
+  void _withdrawAmount() {
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
+    final amount = _parseAmount(_withdrawController.text);
+    if (amount <= 0) {
+      return;
+    }
+    setState(() {
+      _balance -= amount;
+      _withdrawController.clear();
+    });
+  }
+
+  Future<void> _resetWallet() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Resetar carteira?'),
+        content: const Text('Isso limpa o saldo desta carteira.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Resetar'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) {
+      return;
+    }
+    setState(() => _balance = 0);
   }
 
   void _save() {
@@ -2003,8 +2035,7 @@ class _WalletFormPageState extends State<WalletFormPage> {
       Wallet(
         id: initial?.id ?? const Uuid().v4(),
         name: _nameController.text.trim(),
-        positiveAmount: _parseAmount(_positiveController.text),
-        negativeAmount: _parseAmount(_negativeController.text),
+        balance: _balance,
         createdAt: initial?.createdAt ?? DateTime.now(),
       ),
     );
@@ -2043,6 +2074,34 @@ class _WalletFormPageState extends State<WalletFormPage> {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
             children: [
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Saldo da carteira',
+                        style: Theme.of(context).textTheme.labelMedium,
+                      ),
+                      Text(
+                        _currency.format(_balance),
+                        style: Theme.of(context).textTheme.headlineSmall
+                            ?.copyWith(
+                              color: _balance < 0
+                                  ? Theme.of(context).colorScheme.error
+                                  : Theme.of(context).colorScheme.primary,
+                            ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
               TextFormField(
                 controller: _nameController,
                 decoration: const InputDecoration(
@@ -2056,9 +2115,9 @@ class _WalletFormPageState extends State<WalletFormPage> {
               ),
               const SizedBox(height: 12),
               TextFormField(
-                controller: _positiveController,
+                controller: _addController,
                 decoration: const InputDecoration(
-                  labelText: 'Positivo',
+                  labelText: 'Adicionar',
                   prefixIcon: Icon(Icons.add_circle_outline),
                 ),
                 keyboardType: const TextInputType.numberWithOptions(
@@ -2066,11 +2125,20 @@ class _WalletFormPageState extends State<WalletFormPage> {
                 ),
                 validator: _validateAmount,
               ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerRight,
+                child: FilledButton.tonalIcon(
+                  onPressed: _addAmount,
+                  icon: const Icon(Icons.add),
+                  label: const Text('Adicionar ao saldo'),
+                ),
+              ),
               const SizedBox(height: 12),
               TextFormField(
-                controller: _negativeController,
+                controller: _withdrawController,
                 decoration: const InputDecoration(
-                  labelText: 'Negativo',
+                  labelText: 'Retirar',
                   prefixIcon: Icon(Icons.remove_circle_outline),
                 ),
                 keyboardType: const TextInputType.numberWithOptions(
@@ -2078,7 +2146,22 @@ class _WalletFormPageState extends State<WalletFormPage> {
                 ),
                 validator: _validateAmount,
               ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerRight,
+                child: FilledButton.tonalIcon(
+                  onPressed: _withdrawAmount,
+                  icon: const Icon(Icons.remove),
+                  label: const Text('Retirar do saldo'),
+                ),
+              ),
               const SizedBox(height: 20),
+              OutlinedButton.icon(
+                onPressed: _resetWallet,
+                icon: const Icon(Icons.restart_alt),
+                label: const Text('Resetar carteira'),
+              ),
+              const SizedBox(height: 12),
               FilledButton.icon(
                 onPressed: _save,
                 icon: const Icon(Icons.save),
