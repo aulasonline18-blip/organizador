@@ -1696,11 +1696,9 @@ class _WalletsPageState extends State<WalletsPage> {
     }
   }
 
-  Future<void> _openForm([Wallet? wallet]) async {
+  Future<void> _createWallet() async {
     final result = await Navigator.of(context).push<Wallet>(
-      MaterialPageRoute(
-        builder: (context) => WalletFormPage(initialWallet: wallet),
-      ),
+      MaterialPageRoute(builder: (context) => const CreateWalletPage()),
     );
     if (result == null) {
       return;
@@ -1712,6 +1710,26 @@ class _WalletsPageState extends State<WalletsPage> {
       updated.add(result);
     } else {
       updated[index] = result;
+    }
+    await _persist(updated);
+  }
+
+  Future<void> _openWallet(Wallet wallet) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (context) =>
+            WalletDetailPage(wallet: wallet, onWalletChanged: _upsertWallet),
+      ),
+    );
+  }
+
+  Future<void> _upsertWallet(Wallet wallet) async {
+    final updated = [..._wallets];
+    final index = updated.indexWhere((item) => item.id == wallet.id);
+    if (index == -1) {
+      updated.add(wallet);
+    } else {
+      updated[index] = wallet;
     }
     await _persist(updated);
   }
@@ -1779,7 +1797,7 @@ class _WalletsPageState extends State<WalletsPage> {
                         child: WalletTile(
                           wallet: wallet,
                           balanceLabel: _currency.format(wallet.balance),
-                          onEdit: () => _openForm(wallet),
+                          onOpen: () => _openWallet(wallet),
                           onDelete: () => _delete(wallet),
                         ),
                       ),
@@ -1788,7 +1806,7 @@ class _WalletsPageState extends State<WalletsPage> {
               ),
             ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _openForm(),
+        onPressed: _createWallet,
         icon: const Icon(Icons.add),
         label: const Text('Carteira'),
       ),
@@ -1866,14 +1884,14 @@ class WalletTile extends StatelessWidget {
   const WalletTile({
     required this.wallet,
     required this.balanceLabel,
-    required this.onEdit,
+    required this.onOpen,
     required this.onDelete,
     super.key,
   });
 
   final Wallet wallet;
   final String balanceLabel;
-  final VoidCallback onEdit;
+  final VoidCallback onOpen;
   final VoidCallback onDelete;
 
   @override
@@ -1882,126 +1900,201 @@ class WalletTile extends StatelessWidget {
         ? Theme.of(context).colorScheme.error
         : Theme.of(context).colorScheme.primary;
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 10, 6, 10),
-        child: Row(
-          children: [
-            Icon(Icons.account_balance_wallet_outlined, color: balanceColor),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    wallet.name,
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Saldo atual',
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 104),
-              child: Text(
-                balanceLabel,
-                textAlign: TextAlign.end,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                  color: balanceColor,
-                  fontWeight: FontWeight.w700,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: onOpen,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 10, 6, 10),
+          child: Row(
+            children: [
+              Icon(Icons.account_balance_wallet_outlined, color: balanceColor),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      wallet.name,
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 4),
+                    const Text('Abrir carteira'),
+                  ],
                 ),
               ),
-            ),
-            PopupMenuButton<String>(
-              tooltip: 'Acoes',
-              onSelected: (value) {
-                switch (value) {
-                  case 'edit':
-                    onEdit();
-                  case 'delete':
-                    onDelete();
-                }
-              },
-              itemBuilder: (context) => const [
-                PopupMenuItem(value: 'edit', child: Text('Editar')),
-                PopupMenuItem(value: 'delete', child: Text('Excluir')),
-              ],
-            ),
-          ],
+              const SizedBox(width: 8),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 104),
+                child: Text(
+                  balanceLabel,
+                  textAlign: TextAlign.end,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    color: balanceColor,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              PopupMenuButton<String>(
+                tooltip: 'Acoes',
+                onSelected: (value) {
+                  switch (value) {
+                    case 'delete':
+                      onDelete();
+                  }
+                },
+                itemBuilder: (context) => const [
+                  PopupMenuItem(value: 'delete', child: Text('Excluir')),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-class WalletFormPage extends StatefulWidget {
-  const WalletFormPage({this.initialWallet, super.key});
-
-  final Wallet? initialWallet;
+class CreateWalletPage extends StatefulWidget {
+  const CreateWalletPage({super.key});
 
   @override
-  State<WalletFormPage> createState() => _WalletFormPageState();
+  State<CreateWalletPage> createState() => _CreateWalletPageState();
 }
 
-class _WalletFormPageState extends State<WalletFormPage> {
+class _CreateWalletPageState extends State<CreateWalletPage> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
-  final _addController = TextEditingController();
-  final _withdrawController = TextEditingController();
-  final _currency = NumberFormat.simpleCurrency(locale: 'pt_BR');
-  late double _balance;
-
-  @override
-  void initState() {
-    super.initState();
-    final wallet = widget.initialWallet;
-    _nameController.text = wallet?.name ?? '';
-    _balance = wallet?.balance ?? 0;
-  }
 
   @override
   void dispose() {
     _nameController.dispose();
+    super.dispose();
+  }
+
+  void _create() {
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
+    Navigator.pop(
+      context,
+      Wallet(
+        id: const Uuid().v4(),
+        name: _nameController.text.trim(),
+        balance: 0,
+        createdAt: DateTime.now(),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Nova carteira'),
+        actions: [
+          IconButton(
+            tooltip: 'Criar',
+            onPressed: _create,
+            icon: const Icon(Icons.check),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: Form(
+          key: _formKey,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+            children: [
+              TextFormField(
+                controller: _nameController,
+                decoration: const InputDecoration(
+                  labelText: 'Nome da carteira',
+                  prefixIcon: Icon(Icons.account_balance_wallet_outlined),
+                ),
+                textInputAction: TextInputAction.done,
+                onFieldSubmitted: (_) => _create(),
+                validator: (value) => value == null || value.trim().isEmpty
+                    ? 'Informe um nome'
+                    : null,
+              ),
+              const SizedBox(height: 20),
+              FilledButton.icon(
+                onPressed: _create,
+                icon: const Icon(Icons.add),
+                label: const Text('Criar carteira'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class WalletDetailPage extends StatefulWidget {
+  const WalletDetailPage({
+    required this.wallet,
+    required this.onWalletChanged,
+    super.key,
+  });
+
+  final Wallet wallet;
+  final Future<void> Function(Wallet wallet) onWalletChanged;
+
+  @override
+  State<WalletDetailPage> createState() => _WalletDetailPageState();
+}
+
+class _WalletDetailPageState extends State<WalletDetailPage> {
+  final _formKey = GlobalKey<FormState>();
+  final _addController = TextEditingController();
+  final _withdrawController = TextEditingController();
+  final _currency = NumberFormat.simpleCurrency(locale: 'pt_BR');
+  late Wallet _wallet;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _wallet = widget.wallet;
+  }
+
+  @override
+  void dispose() {
     _addController.dispose();
     _withdrawController.dispose();
     super.dispose();
   }
 
-  void _addAmount() {
-    if (!_formKey.currentState!.validate()) {
+  Future<void> _addAmount() async {
+    if (!_formKey.currentState!.validate() || _saving) {
       return;
     }
     final amount = _parseAmount(_addController.text);
     if (amount <= 0) {
       return;
     }
-    setState(() {
-      _balance += amount;
-      _addController.clear();
-    });
+    await _saveBalance(_wallet.balance + amount);
+    _addController.clear();
   }
 
-  void _withdrawAmount() {
-    if (!_formKey.currentState!.validate()) {
+  Future<void> _withdrawAmount() async {
+    if (!_formKey.currentState!.validate() || _saving) {
       return;
     }
     final amount = _parseAmount(_withdrawController.text);
     if (amount <= 0) {
       return;
     }
-    setState(() {
-      _balance -= amount;
-      _withdrawController.clear();
-    });
+    await _saveBalance(_wallet.balance - amount);
+    _withdrawController.clear();
   }
 
   Future<void> _resetWallet() async {
+    if (_saving) {
+      return;
+    }
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -2019,26 +2112,22 @@ class _WalletFormPageState extends State<WalletFormPage> {
         ],
       ),
     );
-    if (confirmed != true) {
-      return;
+    if (confirmed == true) {
+      await _saveBalance(0);
     }
-    setState(() => _balance = 0);
   }
 
-  void _save() {
-    if (!_formKey.currentState!.validate()) {
+  Future<void> _saveBalance(double balance) async {
+    setState(() => _saving = true);
+    final updated = _wallet.copyWith(balance: balance);
+    await widget.onWalletChanged(updated);
+    if (!mounted) {
       return;
     }
-    final initial = widget.initialWallet;
-    Navigator.pop(
-      context,
-      Wallet(
-        id: initial?.id ?? const Uuid().v4(),
-        name: _nameController.text.trim(),
-        balance: _balance,
-        createdAt: initial?.createdAt ?? DateTime.now(),
-      ),
-    );
+    setState(() {
+      _wallet = updated;
+      _saving = false;
+    });
   }
 
   double _parseAmount(String value) {
@@ -2055,19 +2144,11 @@ class _WalletFormPageState extends State<WalletFormPage> {
 
   @override
   Widget build(BuildContext context) {
+    final balanceColor = _wallet.balance < 0
+        ? Theme.of(context).colorScheme.error
+        : Theme.of(context).colorScheme.primary;
     return Scaffold(
-      appBar: AppBar(
-        title: Text(
-          widget.initialWallet == null ? 'Nova carteira' : 'Editar carteira',
-        ),
-        actions: [
-          IconButton(
-            tooltip: 'Salvar',
-            onPressed: _save,
-            icon: const Icon(Icons.check),
-          ),
-        ],
-      ),
+      appBar: AppBar(title: Text(_wallet.name)),
       body: SafeArea(
         child: Form(
           key: _formKey,
@@ -2089,13 +2170,9 @@ class _WalletFormPageState extends State<WalletFormPage> {
                         style: Theme.of(context).textTheme.labelMedium,
                       ),
                       Text(
-                        _currency.format(_balance),
+                        _currency.format(_wallet.balance),
                         style: Theme.of(context).textTheme.headlineSmall
-                            ?.copyWith(
-                              color: _balance < 0
-                                  ? Theme.of(context).colorScheme.error
-                                  : Theme.of(context).colorScheme.primary,
-                            ),
+                            ?.copyWith(color: balanceColor),
                       ),
                     ],
                   ),
@@ -2103,19 +2180,8 @@ class _WalletFormPageState extends State<WalletFormPage> {
               ),
               const SizedBox(height: 12),
               TextFormField(
-                controller: _nameController,
-                decoration: const InputDecoration(
-                  labelText: 'Nome da carteira',
-                  prefixIcon: Icon(Icons.account_balance_wallet_outlined),
-                ),
-                textInputAction: TextInputAction.next,
-                validator: (value) => value == null || value.trim().isEmpty
-                    ? 'Informe um nome'
-                    : null,
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
                 controller: _addController,
+                enabled: !_saving,
                 decoration: const InputDecoration(
                   labelText: 'Adicionar',
                   prefixIcon: Icon(Icons.add_circle_outline),
@@ -2129,7 +2195,7 @@ class _WalletFormPageState extends State<WalletFormPage> {
               Align(
                 alignment: Alignment.centerRight,
                 child: FilledButton.tonalIcon(
-                  onPressed: _addAmount,
+                  onPressed: _saving ? null : _addAmount,
                   icon: const Icon(Icons.add),
                   label: const Text('Adicionar ao saldo'),
                 ),
@@ -2137,6 +2203,7 @@ class _WalletFormPageState extends State<WalletFormPage> {
               const SizedBox(height: 12),
               TextFormField(
                 controller: _withdrawController,
+                enabled: !_saving,
                 decoration: const InputDecoration(
                   labelText: 'Retirar',
                   prefixIcon: Icon(Icons.remove_circle_outline),
@@ -2150,22 +2217,16 @@ class _WalletFormPageState extends State<WalletFormPage> {
               Align(
                 alignment: Alignment.centerRight,
                 child: FilledButton.tonalIcon(
-                  onPressed: _withdrawAmount,
+                  onPressed: _saving ? null : _withdrawAmount,
                   icon: const Icon(Icons.remove),
                   label: const Text('Retirar do saldo'),
                 ),
               ),
               const SizedBox(height: 20),
               OutlinedButton.icon(
-                onPressed: _resetWallet,
+                onPressed: _saving ? null : _resetWallet,
                 icon: const Icon(Icons.restart_alt),
                 label: const Text('Resetar carteira'),
-              ),
-              const SizedBox(height: 12),
-              FilledButton.icon(
-                onPressed: _save,
-                icon: const Icon(Icons.save),
-                label: const Text('Salvar carteira'),
               ),
             ],
           ),
